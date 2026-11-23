@@ -16,7 +16,9 @@
 
 package org.springframework.expression.spel;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import org.junit.Test;
@@ -30,7 +32,10 @@ import org.springframework.expression.PropertyAccessor;
 import org.springframework.expression.TypedValue;
 import org.springframework.expression.spel.standard.SpelExpression;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
+import org.springframework.expression.spel.support.ReflectivePropertyAccessor;
 import org.springframework.expression.spel.support.StandardEvaluationContext;
+import org.springframework.expression.spel.testresources.Person;
+import org.springframework.util.ClassUtils;
 
 import static org.junit.Assert.*;
 
@@ -161,6 +166,102 @@ public class PropertyAccessTests extends AbstractExpressionTests {
 		Expression expression = parser.parseExpression("name");
 		Object value = expression.getValue(new StandardEvaluationContext(String.class));
 		assertEquals(value, "java.lang.String");
+	}
+
+	@Test
+	public void voidGetterOnPersonIsNotReadable() throws Exception {
+		EvaluationContext context = new StandardEvaluationContext();
+		Person target = new Person("p1");
+
+		Expression expr = parser.parseExpression("name");
+		assertEquals("p1", expr.getValue(context, target));
+		target.setName("p2");
+		assertEquals("p2", expr.getValue(context, target));
+
+		try {
+			parser.parseExpression("nonexistent").getValue(context, target);
+			fail("Should have thrown SpelEvaluationException");
+		}
+		catch (SpelEvaluationException ex) {
+			assertEquals(SpelMessage.PROPERTY_OR_FIELD_NOT_READABLE, ex.getMessageCode());
+		}
+
+		Method getInvalid = ClassUtils.getMethod(Person.class, "getInvalid");
+		assertEquals(void.class, getInvalid.getReturnType());
+		try {
+			parser.parseExpression("invalid").getValue(context, target);
+			fail("Should have thrown SpelEvaluationException");
+		}
+		catch (SpelEvaluationException ex) {
+			assertEquals(SpelMessage.PROPERTY_OR_FIELD_NOT_READABLE, ex.getMessageCode());
+		}
+	}
+
+	@Test
+	public void voidReturningMethodIsNotTreatedAsPropertyGetter() throws Exception {
+		VoidAccessorTarget target = new VoidAccessorTarget();
+		VoidAccessorTarget.staticInvocations.clear();
+
+		// A void-returning method must never be selected as a property getter, since
+		// reading such a "property" would invoke the method purely for its side effects.
+		StandardEvaluationContext context = new StandardEvaluationContext();
+		try {
+			parser.parseExpression("invalid").getValue(context, target);
+			fail("Should have thrown SpelEvaluationException");
+		}
+		catch (SpelEvaluationException ex) {
+			assertEquals(SpelMessage.PROPERTY_OR_FIELD_NOT_READABLE, ex.getMessageCode());
+		}
+
+		// Same for a static void-returning "getter" on a Class target
+		StandardEvaluationContext classContext = new StandardEvaluationContext(VoidAccessorTarget.class);
+		try {
+			parser.parseExpression("staticInvalid").getValue(classContext);
+			fail("Should have thrown SpelEvaluationException");
+		}
+		catch (SpelEvaluationException ex) {
+			assertEquals(SpelMessage.PROPERTY_OR_FIELD_NOT_READABLE, ex.getMessageCode());
+		}
+
+		ReflectivePropertyAccessor accessor = new ReflectivePropertyAccessor();
+		assertFalse(accessor.canRead(context, target, "invalid"));
+		assertFalse(accessor.canRead(context, VoidAccessorTarget.class, "staticInvalid"));
+		try {
+			accessor.read(context, target, "invalid");
+			fail("Should have thrown AccessException");
+		}
+		catch (AccessException ex) {
+			// expected
+		}
+		assertSame(accessor, accessor.createOptimalAccessor(context, target, "invalid"));
+
+		// Regular getters on the same type remain readable
+		assertEquals("ok", parser.parseExpression("valid").getValue(context, target));
+
+		assertEquals(Collections.emptyList(), target.invocations);
+		assertEquals(Collections.emptyList(), VoidAccessorTarget.staticInvocations);
+	}
+
+
+	// Records every invocation, so that a void-returning method being mistaken for a
+	// property getter can be detected via the side effect it would have triggered.
+	public static class VoidAccessorTarget {
+
+		static final List<String> staticInvocations = new ArrayList<String>();
+
+		final List<String> invocations = new ArrayList<String>();
+
+		public String getValid() {
+			return "ok";
+		}
+
+		public void getInvalid() {
+			this.invocations.add("getInvalid");
+		}
+
+		public static void getStaticInvalid() {
+			staticInvocations.add("getStaticInvalid");
+		}
 	}
 
 
