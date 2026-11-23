@@ -40,11 +40,30 @@ import org.springframework.expression.spel.support.BooleanTypedValue;
  */
 public class OperatorMatches extends Operator {
 
-	private final ConcurrentMap<String, Pattern> patternCache = new ConcurrentHashMap<String, Pattern>();
+	/**
+	 * Maximum number of characters permitted in a regular expression.
+	 */
+	private static final int MAX_REGEX_LENGTH = 1000;
+
+	private final ConcurrentMap<String, Pattern> patternCache;
 
 
+	/**
+	 * Create a new {@link OperatorMatches} instance.
+	 * <p>Consider invoking
+	 * {@link #OperatorMatches(ConcurrentMap, int, SpelNodeImpl...)}
+	 * with a shared pattern cache instead.
+	 */
 	public OperatorMatches(int pos, SpelNodeImpl... operands) {
+		this(new ConcurrentHashMap<String, Pattern>(), pos, operands);
+	}
+
+	/**
+	 * Create a new {@link OperatorMatches} instance with a shared pattern cache.
+	 */
+	public OperatorMatches(ConcurrentMap<String, Pattern> patternCache, int pos, SpelNodeImpl... operands) {
 		super("matches", pos, operands);
+		this.patternCache = patternCache;
 	}
 
 
@@ -61,7 +80,7 @@ public class OperatorMatches extends Operator {
 		SpelNodeImpl leftOp = getLeftOperand();
 		SpelNodeImpl rightOp = getRightOperand();
 		Object left = leftOp.getValue(state, String.class);
-		Object right = getRightOperand().getValueInternal(state).getValue();
+		Object right = rightOp.getValueInternal(state).getValue();
 
 		if (!(left instanceof String)) {
 			throw new SpelEvaluationException(leftOp.getStartPosition(),
@@ -71,20 +90,28 @@ public class OperatorMatches extends Operator {
 			throw new SpelEvaluationException(rightOp.getStartPosition(),
 					SpelMessage.INVALID_SECOND_OPERAND_FOR_MATCHES_OPERATOR, right);
 		}
+		String input = (String) left;
+		String regex = (String) right;
 
 		try {
-			String leftString = (String) left;
-			String rightString = (String) right;
-			Pattern pattern = this.patternCache.get(rightString);
+			Pattern pattern = this.patternCache.get(regex);
 			if (pattern == null) {
-				pattern = Pattern.compile(rightString);
-				this.patternCache.putIfAbsent(rightString, pattern);
+				checkRegexLength(regex);
+				pattern = Pattern.compile(regex);
+				this.patternCache.putIfAbsent(regex, pattern);
 			}
-			Matcher matcher = pattern.matcher(leftString);
+			Matcher matcher = pattern.matcher(input);
 			return BooleanTypedValue.forValue(matcher.matches());
 		}
 		catch (PatternSyntaxException ex) {
 			throw new SpelEvaluationException(rightOp.getStartPosition(), ex, SpelMessage.INVALID_PATTERN, right);
+		}
+	}
+
+	private void checkRegexLength(String regex) {
+		if (regex.length() > MAX_REGEX_LENGTH) {
+			throw new SpelEvaluationException(getStartPosition(),
+					SpelMessage.MAX_REGEX_LENGTH_EXCEEDED, MAX_REGEX_LENGTH);
 		}
 	}
 
