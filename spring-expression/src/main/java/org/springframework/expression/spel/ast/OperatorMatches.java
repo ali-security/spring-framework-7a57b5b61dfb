@@ -93,6 +93,7 @@ public class OperatorMatches extends Operator {
 		String input = (String) left;
 		String regex = (String) right;
 
+		state.trackOperation();
 		try {
 			Pattern pattern = this.patternCache.get(regex);
 			if (pattern == null) {
